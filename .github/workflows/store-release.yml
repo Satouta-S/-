@@ -37,7 +37,6 @@ jobs:
             mkdir -p gradle/wrapper
             # gradle-wrapper.properties
             printf '%s\n' \
-'distributionBase=GRADLE_USER_HOME' \
 'distributionPath=wrapper/dists' \
 'https://services.gradle.org/distributions/gradle-8.7-bin.zip' | \
             awk 'NR==3{print "distributionUrl=" $0; next} {print}' \
