@@ -33,39 +33,36 @@ jobs:
           echo "----- gradle dir -----"
           ls -la gradle || true
 
-      - name: Ensure Gradle wrapper (8.7) if missing
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ ! -f "./gradlew" ]; then
-            echo "Bootstrapping Gradle wrapper 8.7"
-            WRAP_VER=8.7
-            mkdir -p gradle/wrapper
-            printf '%s\n' \
-              'distributionBase=GRADLE_USER_HOME' \
-              'distributionPath=wrapper/dists' \
-              "distributionUrl=https://services.gradle.org/distributions/gradle-${WRAP_VER}-bin.zip" \
-              'zipStoreBase=GRADLE_USER_HOME' \
-              'zipStorePath=wrapper/dists' \
-              > gradle/wrapper/gradle-wrapper.properties
+- name: Ensure Gradle wrapper (8.7) if missing
+  shell: bash
+  run: |
+    set -euo pipefail
+    if [ ! -f "./gradlew" ]; then
+      mkdir -p gradle/wrapper
+      printf '%s\n' \
+        'distributionBase=GRADLE_USER_HOME' \
+        'distributionPath=wrapper/dists' \
+        'distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip' \
+        'zipStoreBase=GRADLE_USER_HOME' \
+        'zipStorePath=wrapper/dists' \
+        > gradle/wrapper/gradle-wrapper.properties
 
-            curl -fsSL "https://github.com/gradle/gradle/raw/v${WRAP_VER}/gradle/wrapper/gradle-wrapper.jar" \
-              -o gradle/wrapper/gradle-wrapper.jar
+      curl -fL --retry 3 "https://raw.githubusercontent.com/gradle/gradle/v8.7/gradle/wrapper/gradle-wrapper.jar" \
+        -o gradle/wrapper/gradle-wrapper.jar || \
+      curl -fL --retry 3 "https://github.com/gradle/gradle/raw/v8.7/gradle/wrapper/gradle-wrapper.jar" \
+        -o gradle/wrapper/gradle-wrapper.jar
 
-            printf '%s\n' \
-              '#!/usr/bin/env sh' \
-              'DIR="$(cd "$(dirname "$0")" && pwd)"' \
-              'JAVA_EXE="${JAVA_HOME}/bin/java"' \
-              'if [ ! -x "$JAVA_EXE" ]; then JAVA_EXE="$(command -v java)"; fi' \
-              'exec "$JAVA_EXE" -Dorg.gradle.appname=gradlew -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"' \
-              > gradlew
+      printf '%s\n' \
+        '#!/usr/bin/env sh' \
+        'DIR="$(cd "$(dirname "$0")" && pwd)"' \
+        'JAVA_EXE="${JAVA_HOME}/bin/java"' \
+        'if [ ! -x "$JAVA_EXE" ]; then JAVA_EXE="$(command -v java)"; fi' \
+        'exec "$JAVA_EXE" -Dorg.gradle.appname=gradlew -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"' \
+        > gradlew
 
-            chmod +x gradlew
-          else
-            echo "Gradle wrapper already present ✅"
-          fi
-          ./gradlew --version
-
+      chmod +x gradlew
+    fi
+    ./gradlew --version
 
       - name: Prepare keystore (optional)
         shell: bash
