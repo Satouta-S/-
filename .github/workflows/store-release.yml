@@ -1,3 +1,11 @@
+name: Android Store Release (Auto)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,17 +19,18 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      # ✅ شوف احنا واقفين فين واطبع الملفات
+      # ✅ دي خطوة تشخيص بس علشان نتأكد إن كل حاجة في مكانها
       - name: Debug – where am I?
+        shell: bash
         run: |
+          set -euo pipefail
           pwd
+          echo "----- repo top -----"
           ls -la
-          echo "----- repo tree (top) -----"
-          ls -la .
           echo "----- gradle dir -----"
           ls -la gradle || true
 
-      # ✅ لو gradlew مش موجود، بنعمله تلقائياً
+      # ✅ لو gradlew مش موجود بنضيف Wrapper تلقائيًا (Gradle 8.7)
       - name: Ensure Gradle wrapper (8.7) if missing
         shell: bash
         run: |
@@ -31,43 +40,45 @@ jobs:
             WRAP_VER=8.7
             mkdir -p gradle/wrapper
             cat > gradle/wrapper/gradle-wrapper.properties <<EOF
-            distributionBase=GRADLE_USER_HOME
-            distributionPath=wrapper/dists
-            distributionUrl=https\://services.gradle.org/distributions/gradle-${WRAP_VER}-bin.zip
-            zipStoreBase=GRADLE_USER_HOME
-            zipStorePath=wrapper/dists
-            EOF
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-${WRAP_VER}-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
             curl -fsSL https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/${WRAP_VER}/gradle-wrapper-${WRAP_VER}.jar \
               -o gradle/wrapper/gradle-wrapper.jar
             cat > gradlew <<'EOF'
-            #!/usr/bin/env sh
-            DIR="$(cd "$(dirname "$0")" && pwd)"
-            JAVA_EXE="${JAVA_HOME}/bin/java"
-            if [ ! -x "$JAVA_EXE" ]; then JAVA_EXE="$(command -v java)"; fi
-            exec "$JAVA_EXE" -Dorg.gradle.appname=gradlew -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
-            EOF
+#!/usr/bin/env sh
+DIR="$(cd "$(dirname "$0")" && pwd)"
+JAVA_EXE="${JAVA_HOME}/bin/java"
+if [ ! -x "$JAVA_EXE" ]; then JAVA_EXE="$(command -v java)"; fi
+exec "$JAVA_EXE" -Dorg.gradle.appname=gradlew -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
+EOF
             chmod +x gradlew
           else
             echo "Gradle wrapper already present ✅"
           fi
           ls -la gradlew gradle/wrapper || true
 
-      # 🔐 خطوة الكي ستور (زي ما هي)
+      # 🔐 خطوة الكي ستور (مرّة واحدة بس)
       - name: Prepare keystore
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
         run: |
           set -euo pipefail
           if [ -n "${KS_B64:-}" ]; then
             echo "$KS_B64" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
             echo "ANDROID_KEYSTORE=$GITHUB_WORKSPACE/release.jks" >> "$GITHUB_ENV"
-            echo "Keystore decoded."
+            echo "🔐 Keystore decoded."
           else
-            echo "No ANDROID_KEYSTORE_BASE64 provided — proceeding unsigned."
+            echo "ℹ️ No ANDROID_KEYSTORE_BASE64 provided — proceeding unsigned if allowed."
           fi
 
       # 🏗️ البناء
       - name: Build AAB (auto)
+        shell: bash
         env:
           ANDROID_KEYSTORE: ${{ env.ANDROID_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -83,3 +94,25 @@ jobs:
           fi
           echo "Using task: $TASK"
           ./gradlew $TASK --stacktrace --no-daemon
+
+      - name: Locate AAB
+        id: out
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in app/build/outputs/bundle/storeRelease/*.aab app/build/outputs/bundle/release/*.aab; do
+            if [ -f "$f" ]; then
+              echo "AAB=$f" >> "$GITHUB_OUTPUT"
+              echo "Found $f"
+              exit 0
+            fi
+          done
+          echo "No AAB found"
+          ls -R app/build/outputs || true
+          exit 1
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-release.aab
+          path: ${{ steps.out.outputs.AAB }}
