@@ -33,8 +33,7 @@ jobs:
           echo "----- gradle dir -----"
           ls -la gradle || true
 
-      # ⬇️ نولّد Gradle Wrapper 8.7 لو مش موجود
-           - name: Ensure Gradle wrapper (8.7) if missing
+      - name: Ensure Gradle wrapper (8.7) if missing
         shell: bash
         run: |
           set -euo pipefail
@@ -50,7 +49,6 @@ jobs:
               'zipStorePath=wrapper/dists' \
               > gradle/wrapper/gradle-wrapper.properties
 
-            # ✅ نجيب الـ JAR من الريبو الرسمي بدل Maven (اللي رجّع 404)
             curl -fsSL "https://github.com/gradle/gradle/raw/v${WRAP_VER}/gradle/wrapper/gradle-wrapper.jar" \
               -o gradle/wrapper/gradle-wrapper.jar
 
@@ -67,6 +65,7 @@ jobs:
             echo "Gradle wrapper already present ✅"
           fi
           ./gradlew --version
+
 
       - name: Prepare keystore (optional)
         shell: bash
