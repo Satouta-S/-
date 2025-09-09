@@ -64,6 +64,7 @@ jobs:
     fi
     ./gradlew --version
 
+
       - name: Prepare keystore (optional)
         shell: bash
         env:
