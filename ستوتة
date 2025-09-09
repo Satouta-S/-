@@ -1,0 +1,453 @@
+cat > setup_setouta.sh <<'BASH'
+set -euo pipefail
+
+echo "🧱 إنشاء هيكل مشروع أندرويد (Satouta)…"
+mkdir -p app/src/main/java/com/satouta/assistant
+mkdir -p app/src/main/res/layout
+touch app/proguard-rules.pro
+
+# ---------- settings.gradle ----------
+cat > settings.gradle <<'EOF'
+pluginManagement {
+  repositories {
+    gradlePluginPortal()
+    google()
+    mavenCentral()
+  }
+}
+dependencyResolutionManagement {
+  repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+  repositories {
+    google()
+    mavenCentral()
+  }
+}
+rootProject.name = "Satouta"
+include(":app")
+EOF
+
+# ---------- build.gradle (root) ----------
+cat > build.gradle <<'EOF'
+plugins {
+  id "com.android.application" version "8.5.2" apply false
+  id "org.jetbrains.kotlin.android" version "1.9.24" apply false
+}
+EOF
+
+# ---------- gradle.properties ----------
+cat > gradle.properties <<'EOF'
+org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+EOF
+
+# ---------- app/build.gradle ----------
+cat > app/build.gradle <<'EOF'
+plugins {
+  id "com.android.application"
+  id "org.jetbrains.kotlin.android"
+}
+
+android {
+  namespace "com.satouta.assistant"
+  compileSdk 34
+
+  defaultConfig {
+    applicationId "com.satouta.assistant"
+    minSdk 26
+    targetSdk 34
+    versionCode 1
+    versionName "1.0"
+  }
+
+  buildTypes {
+    release {
+      minifyEnabled false
+      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+    }
+  }
+
+  buildFeatures {
+    viewBinding true
+  }
+}
+
+dependencies {
+  implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
+  implementation "androidx.core:core-ktx:1.13.1"
+  implementation "androidx.appcompat:appcompat:1.7.0"
+  implementation "com.google.android.material:material:1.12.0"
+  implementation "androidx.activity:activity-ktx:1.9.2"
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+}
+EOF
+
+# ---------- AndroidManifest.xml ----------
+mkdir -p app/src/main
+cat > app/src/main/AndroidManifest.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.satouta.assistant">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
+    <application
+        android:label="Satouta"
+        android:allowBackup="true"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF
+
+# ---------- layout ----------
+cat > app/src/main/res/layout/activity_main.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:id="@+id/status"
+        android:text="ستوتة جاهزة ✨"
+        android:textSize="18sp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+
+    <Button
+        android:id="@+id/btnTalk"
+        android:text="اضغط وتكلم"
+        android:layout_marginTop="24dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+</LinearLayout>
+EOF
+
+# ---------- Kotlin: Agent/Tools/Core ----------
+cat > app/src/main/java/com/satouta/assistant/core.kt <<'EOF'
+package com.satouta.assistant
+
+import android.app.AlertDialog
+import android.content.Context
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+
+enum class Risk { LOW, MEDIUM, HIGH }
+
+interface Tool {
+    val name: String
+    val risk: Risk
+    suspend fun run(input: String, ctx: AgentContext): String
+}
+
+object ToolRegistry {
+    private val tools = mutableMapOf<String, Tool>()
+    fun register(tool: Tool) { tools[tool.name] = tool }
+    fun get(name: String): Tool? = tools[name]
+    fun names(): Set<String> = tools.keys
+}
+
+class AgentContext(val app: Context)
+
+class Guard(private val context: Context) {
+    suspend fun confirm(tool: Tool, text: String): Boolean {
+        if (tool.risk == Risk.LOW) return true
+        return suspendCancellableCoroutine { cont ->
+            val dlg = AlertDialog.Builder(context)
+                .setTitle("تأكيد")
+                .setMessage("أنفّذ: $text ؟")
+                .setPositiveButton("نعم") { _, _ -> cont.resume(true) }
+                .setNegativeButton("لا") { _, _ -> cont.resume(false) }
+                .setOnCancelListener { cont.resume(false) }
+                .create()
+            dlg.show()
+            cont.invokeOnCancellation { dlg.dismiss() }
+        }
+    }
+}
+
+interface Asr { suspend fun listenOnce(): String? }
+interface Tts { suspend fun speak(text: String) }
+
+class Agent(
+    private val app: Context,
+    private val asr: Asr,
+    private val tts: Tts,
+    private val guard: Guard
+) {
+    suspend fun once() {
+        val heard = asr.listenOnce() ?: return
+        val plan = plan(heard)
+        val ok = guard.confirm(plan.tool, plan.humanText)
+        if (!ok) { tts.speak("ألغيته"); return }
+        val resultMsg = plan.tool.run(plan.arg, AgentContext(app))
+        tts.speak(resultMsg)
+    }
+
+    data class Plan(val tool: Tool, val arg: String, val humanText: String)
+
+    private fun plan(text: String): Plan {
+        val lower = text.lowercase()
+        return when {
+            listOf("افتح", "شغل").any { lower.contains(it) } -> {
+                val query = lower.replace("افتح", "").replace("شغل", "").trim()
+                val tool = ToolRegistry.get("open_app")!!
+                Plan(tool, query.ifBlank { "google" }, "فتح تطبيق: $query")
+            }
+            listOf("خرائط", "جوجل ماب", "maps", "وصّل").any { lower.contains(it) } -> {
+                val tool = ToolRegistry.get("maps")!!
+                Plan(tool, lower, "فتح الخرائط")
+            }
+            listOf("مؤقت", "تايمر", "ذكّرني بعد").any { lower.contains(it) } -> {
+                val tool = ToolRegistry.get("timer")!!
+                Plan(tool, lower, "تشغيل مؤقت")
+            }
+            else -> {
+                val tool = ToolRegistry.get("open_app")!!
+                Plan(tool, "google", "فتح جوجل")
+            }
+        }
+    }
+}
+EOF
+
+cat > app/src/main/java/com/satouta/assistant/MainActivity.kt <<'EOF'
+package com.satouta.assistant
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.widget.Button
+import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+    private lateinit var agent: Agent
+    private lateinit var status: TextView
+    private lateinit var btnTalk: Button
+
+    private val micPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) status.text = "🎤 إذن الميكروفون مرفوض"
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        status = findViewById(R.id.status)
+        btnTalk = findViewById(R.id.btnTalk)
+
+        val asr = object : Asr {
+            override suspend fun listenOnce(): String? {
+                return "افتح جوجل ماب"
+            }
+        }
+        val tts = object : Tts {
+            override suspend fun speak(text: String) {
+                runOnUiThread { status.text = "🗣️ $text" }
+            }
+        }
+
+        ToolRegistry.register(OpenAppTool(packageManager, this))
+        ToolRegistry.register(MapsTool(this))
+        ToolRegistry.register(TimerTool(this))
+
+        agent = Agent(this, asr, tts, Guard(this))
+
+        btnTalk.setOnClickListener {
+            ensureMic()
+            lifecycleScope.launch {
+                status.text = "🎙️ بسجل..."
+                agent.once()
+            }
+        }
+    }
+
+    private fun ensureMic() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+}
+EOF
+
+cat > app/src/main/java/com/satouta/assistant/tool_open_app.kt <<'EOF'
+package com.satouta.assistant
+
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
+
+class OpenAppTool(private val pm: PackageManager, private val ctx: Context) : Tool {
+    override val name = "open_app"
+    override val risk = Risk.LOW
+
+    override suspend fun run(input: String, ctxAgent: AgentContext): String {
+        val target = input.ifBlank { "google" }
+        val apps = pm.getInstalledApplications(0)
+        val match = apps.firstOrNull {
+            val label = it.loadLabel(pm).toString()
+            label.contains(target, ignoreCase = true) || it.packageName.contains(target, ignoreCase = true)
+        } ?: run {
+            Toast.makeText(ctx, "ملقتش $target", Toast.LENGTH_SHORT).show()
+            return "ملقتش $target"
+        }
+        val intent = pm.getLaunchIntentForPackage(match.packageName) ?: return "ملقتش $target"
+        return try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(intent)
+            "فتحته"
+        } catch (_: Exception) {
+            "محصلش فتح"
+        }
+    }
+}
+EOF
+
+cat > app/src/main/java/com/satouta/assistant/tool_maps.kt <<'EOF'
+package com.satouta.assistant
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+
+class MapsTool(private val ctx: Context) : Tool {
+    override val name = "maps"
+    override val risk = Risk.LOW
+
+    override suspend fun run(input: String, ctxAgent: AgentContext): String {
+        val q = input.replace("خرائط", "").replace("جوجل ماب", "").replace("maps","").trim()
+        val uri = Uri.parse("geo:0,0?q=" + Uri.encode(if (q.isBlank()) "nearby" else q))
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            setPackage("com.google.android.apps.maps")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try { ctx.startActivity(intent); "فتحت الخرائط" } catch (_: Exception) { "محتاج تطبيق الخرائط" }
+    }
+}
+EOF
+
+cat > app/src/main/java/com/satouta/assistant/tool_timer.kt <<'EOF'
+package com.satouta.assistant
+
+import android.content.Context
+import android.content.Intent
+import android.provider.AlarmClock
+
+class TimerTool(private val ctx: Context) : Tool {
+    override val name = "timer"
+    override val risk = Risk.LOW
+
+    override suspend fun run(input: String, ctxAgent: AgentContext): String {
+        val mins = Regex("(\\d+)").find(input)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+            putExtra(AlarmClock.EXTRA_LENGTH, mins * 60)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try { ctx.startActivity(intent); "ظبطت مؤقت $mins دقيقة" } catch (_: Exception) { "معرفتش أظبط المؤقت" }
+    }
+}
+EOF
+
+# ---------- GitHub Actions (smart) ----------
+mkdir -p .github/workflows
+cat > .github/workflows/store-release.yml <<'EOF'
+name: Android Store Release (Auto)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+
+      - name: Prepare keystore
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KS_B64:-}" ]; then
+            echo "$KS_B64" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+            echo "ANDROID_KEYSTORE=$GITHUB_WORKSPACE/release.jks" >> "$GITHUB_ENV"
+            echo "🔐 Keystore decoded."
+          else
+            echo "ℹ️ No ANDROID_KEYSTORE_BASE64 provided — proceeding unsigned if allowed."
+          fi
+
+      - name: Build AAB (auto)
+        shell: bash
+        env:
+          ANDROID_KEYSTORE: ${{ env.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          if ./gradlew :app:tasks --all | grep -q "^bundleStoreRelease"; then
+            TASK=":app:bundleStoreRelease"
+          else
+            TASK=":app:bundleRelease"
+          fi
+          echo "Using task: $TASK"
+          ./gradlew $TASK --stacktrace --no-daemon
+
+      - name: Locate AAB
+        id: out
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in app/build/outputs/bundle/storeRelease/*.aab app/build/outputs/bundle/release/*.aab; do
+            if [ -f "$f" ]; then echo "AAB=$f" >> $GITHUB_OUTPUT; echo "Found $f"; exit 0; fi
+          done
+          echo "No AAB found"; ls -R app/build/outputs || true; exit 1
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-release.aab
+          path: ${{ steps.out.outputs.AAB }}
+EOF
+
+echo "📝 تهيئة git (لو لسه)"
+git config user.email >/dev/null 2>&1 || git config user.email "bot@satouta.local"
+git config user.name  >/dev/null 2>&1 || git config user.name  "Satouta Bot"
+
+echo "✅ إضافة ورفع الملفات"
+git add .
+git commit -m "feat: bootstrap Satouta Android app + Agent + Tools + CI"
+git push || true
+
+echo "🎉 تم إنشاء المشروع. افتح تبويب Actions وشغّل: Android Store Release (Auto)."
+BASH
+
+bash setup_setouta.sh
