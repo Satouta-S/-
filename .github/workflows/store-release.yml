@@ -37,7 +37,6 @@ jobs:
             mkdir -p gradle/wrapper
             # gradle-wrapper.properties
             printf '%s\n' \
-
             awk 'NR==3{print "distributionUrl=" $0; next} {print}' \
             > gradle/wrapper/gradle-wrapper.properties
 
