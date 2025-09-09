@@ -1,7 +1,7 @@
 name: Android Store Release (Auto)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -34,30 +34,27 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f "./gradlew" ]; then
-            echo "Gradle wrapper missing… bootstrapping"
             WRAP_VER=8.7
             mkdir -p gradle/wrapper
-            cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-EOF
+            # gradle-wrapper.properties
+            printf '%s\n' \
+'distributionBase=GRADLE_USER_HOME' \
+'distributionPath=wrapper/dists' \
+'distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip' \
+'zipStoreBase=GRADLE_USER_HOME' \
+'zipStorePath=wrapper/dists' > gradle/wrapper/gradle-wrapper.properties
+            # gradle-wrapper.jar
             curl -fsSL "https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/8.7/gradle-wrapper-8.7.jar" \
               -o gradle/wrapper/gradle-wrapper.jar
-            cat > gradlew <<'EOF'
-#!/usr/bin/env sh
-DIR="$(cd "$(dirname "$0")" && pwd)"
-JAVA_EXE="${JAVA_HOME}/bin/java"
-if [ ! -x "$JAVA_EXE" ]; then JAVA_EXE="$(command -v java)"; fi
-exec "$JAVA_EXE" -Dorg.gradle.appname=gradlew -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
-EOF
+            # gradlew
+            printf '%s\n' '#!/usr/bin/env sh' \
+'DIR="$(cd "$(dirname "$0")" && pwd)"' \
+'JAVA_EXE="${JAVA_HOME}/bin/java"' \
+'if [ ! -x "$JAVA_EXE" ]; then JAVA_EXE="$(command -v java)"; fi' \
+'exec "$JAVA_EXE" -Dorg.gradle.appname=gradlew -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"' > gradlew
             chmod +x gradlew
-          else
-            echo "Gradle wrapper already present ✅"
           fi
-          ls -la gradlew gradle/wrapper || true
+          ./gradlew --version
 
       - name: Prepare keystore
         shell: bash
@@ -83,10 +80,10 @@ EOF
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          if ./gradlew :app:tasks --all | grep -q "^bundleStoreRelease"; then
-            TASK=":app:bundleStoreRelease"
+          if ./gradlew :app:tasks --all | grep -q '^bundleStoreRelease'; then
+            TASK=':app:bundleStoreRelease'
           else
-            TASK=":app:bundleRelease"
+            TASK=':app:bundleRelease'
           fi
           echo "Using task: $TASK"
           ./gradlew $TASK --stacktrace --no-daemon
@@ -96,16 +93,14 @@ EOF
         shell: bash
         run: |
           set -euo pipefail
+          AAB=""
           for f in app/build/outputs/bundle/storeRelease/*.aab app/build/outputs/bundle/release/*.aab; do
-            if [ -f "$f" ]; then
-              echo "AAB=$f" >> "$GITHUB_OUTPUT"
-              echo "Found $f"
-              exit 0
-            fi
+            if [ -f "$f" ]; then AAB="$f"; break; fi
           done
-          echo "No AAB found"
-          ls -R app/build/outputs || true
-          exit 1
+          if [ -z "$AAB" ]; then
+            echo "No AAB found"; ls -R app/build/outputs || true; exit 1
+          fi
+          echo "AAB=$AAB" >> "$GITHUB_OUTPUT"
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
