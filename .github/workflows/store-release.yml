@@ -34,18 +34,19 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f "./gradlew" ]; then
-            WRAP_VER=8.7
             mkdir -p gradle/wrapper
             # gradle-wrapper.properties
             printf '%s\n' \
 'distributionBase=GRADLE_USER_HOME' \
 'distributionPath=wrapper/dists' \
-'distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip' \
-'zipStoreBase=GRADLE_USER_HOME' \
-'zipStorePath=wrapper/dists' > gradle/wrapper/gradle-wrapper.properties
+'https://services.gradle.org/distributions/gradle-8.7-bin.zip' | \
+            awk 'NR==3{print "distributionUrl=" $0; next} {print}' \
+            > gradle/wrapper/gradle-wrapper.properties
+
             # gradle-wrapper.jar
             curl -fsSL "https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/8.7/gradle-wrapper-8.7.jar" \
               -o gradle/wrapper/gradle-wrapper.jar
+
             # gradlew
             printf '%s\n' '#!/usr/bin/env sh' \
 'DIR="$(cd "$(dirname "$0")" && pwd)"' \
@@ -95,7 +96,7 @@ jobs:
           set -euo pipefail
           AAB=""
           for f in app/build/outputs/bundle/storeRelease/*.aab app/build/outputs/bundle/release/*.aab; do
-            if [ -f "$f" ]; then AAB="$f"; break; fi
+            [ -f "$f" ] && { AAB="$f"; break; }
           done
           if [ -z "$AAB" ]; then
             echo "No AAB found"; ls -R app/build/outputs || true; exit 1
